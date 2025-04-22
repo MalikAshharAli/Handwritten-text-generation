@@ -1,0 +1,133 @@
+# ✍️ Handwritten Text Generation using Deepwriting, IAM, and HKR Datasets
+---
+This notebook demonstrates how to generate realistic human-like handwriting using deep learning. We'll train a simple RNN-based model on handwriting stroke data, and generate sequences that look like handwritten text.
+
+### 🔧 Datasets Used:
+- [Deepwriting Dataset](https://paperswithcode.com/dataset/deepwriting)
+- [IAM Handwriting Dataset](https://paperswithcode.com/dataset/iam)
+- [HKR Handwriting Dataset (Korean)](https://paperswithcode.com/dataset/hkr)
+
+---
+!pip install torch torchvision torchaudio matplotlib pandas
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import os
+
+import numpy as np
+
+sample_strokes = []
+
+for _ in range(100):
+    seq_len = np.random.randint(20, 40)
+    x = np.cumsum(np.random.randn(seq_len))
+    y = np.cumsum(np.random.randn(seq_len))
+    pen_state = np.ones(seq_len)
+    pen_state[np.random.choice(seq_len, size=5, replace=False)] = 0  # simulate pen lifts
+    sequence = np.stack([x, y, pen_state], axis=1)
+    sample_strokes.append(sequence)
+
+np.save("sample_strokes.npy", np.array(sample_strokes, dtype=object), allow_pickle=True)
+
+## 📂 Load Handwriting Stroke Dataset
+Each data sample is a sequence of `[x, y, pen_state]`, where `pen_state=1` means pen-down and `0` means pen-up.
+
+class HandwritingDataset(Dataset):
+    def __init__(self, data_path):
+        self.data = np.load(data_path, allow_pickle=True)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        sample = self.data[idx]
+        return torch.tensor(sample, dtype=torch.float)
+
+## 🧠 Define the RNN Model
+
+class HandwritingRNN(nn.Module):
+    def __init__(self, input_size=3, hidden_size=128, num_layers=2):
+        super(HandwritingRNN, self).__init__()
+        self.rnn = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+        self.fc = nn.Linear(hidden_size, input_size)
+
+    def forward(self, x):
+        out, _ = self.rnn(x)
+        out = self.fc(out)
+        return out
+
+## 🧪 Train the Model
+
+def train(model, dataloader, epochs=5, lr=0.001):
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.MSELoss()
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0
+        for batch in dataloader:
+            batch = batch.to(device)
+            inputs = batch[:, :-1, :]
+            targets = batch[:, 1:, :]
+
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {total_loss/len(dataloader):.4f}")
+
+## ⚙️ Load Dataset and Start Training
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Replace with actual path to .npy or .npz strokes data
+dataset = HandwritingDataset("sample_strokes.npy")  # e.g., from Deepwriting or IAM
+dataloader = DataLoader(dataset, batch_size=16, shuffle=True, drop_last=True)
+
+model = HandwritingRNN().to(device)
+train(model, dataloader)
+
+## ✨ Generate New Handwriting
+
+def generate(model, start_stroke, length=50):
+    model.eval()
+    stroke = torch.tensor(start_stroke, dtype=torch.float).unsqueeze(0).to(device)
+    output = [stroke[:, 0, :].detach().cpu().numpy()]
+    
+    with torch.no_grad():
+        for _ in range(length):
+            out = model(stroke)
+            next_point = out[:, -1, :].unsqueeze(1)
+            stroke = torch.cat([stroke, next_point], dim=1)
+            output.append(next_point[0, 0].cpu().numpy())
+    return np.array(output)
+
+## 🖼️ Visualize Generated Handwriting
+
+def plot_stroke(sequence):
+    x, y, pen = [], [], []
+    for point in sequence:
+        x.append(point[0])
+        y.append(-point[1])  # Invert Y for natural view
+        pen.append(point[2])
+
+    plt.figure(figsize=(6, 2))
+    for i in range(1, len(x)):
+        if pen[i] < 0.5:
+            plt.plot(x[i-1:i+1], y[i-1:i+1], 'k-', linewidth=1)
+    plt.axis('off')
+    plt.show()
+
+# Generate handwriting from initial stroke
+start = [[0, 0, 1]]  # Starting from origin, pen down
+output = generate(model, start, length=100)
+plot_stroke(output)
+
